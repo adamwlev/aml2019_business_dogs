@@ -24,8 +24,8 @@ class PrepareData(Dataset):
         return self.X[idx], self.y[idx]
 
 def get_pic_mats(n_components):
-    pics_train = np.load('pics_train_full_new.npy')
-    pics_test = np.load('pics_test_full_new.npy')
+    pics_train = np.load('pics_train_tf.npy')
+    pics_test = np.load('pics_test_tf.npy')
 
     pca = PCA(n_components=n_components)
     pca.fit(pics_train)
@@ -35,7 +35,7 @@ def get_pic_mats(n_components):
 
 def fit(X,y,n_epochs,H_1):
     ds = PrepareData(X=X, y=y)
-    dl = DataLoader(ds, batch_size=22, shuffle=True)
+    dl = DataLoader(ds, batch_size=25, shuffle=True)
     
     device = torch.device('cpu')
     
@@ -63,7 +63,7 @@ def fit(X,y,n_epochs,H_1):
             print(s,res)
         return ret
     
-    optimizer = torch.optim.Adam(params=model.parameters(), lr=0.000004, weight_decay=.5)
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=5.5e-05, weight_decay=3.5)
     for t in range(n_epochs):
         for ix, (_x, _y) in enumerate(dl):
             _x = Variable(_x).float()
@@ -119,11 +119,11 @@ def save_submission(preds):
 
 if __name__=="__main__":
 
-    text_train = np.load('text_train_full_new.npy')
-    text_test = np.load('text_test_full_new.npy')
+    text_train = np.load('text_train_tf.npy')
+    text_test = np.load('text_test_tf.npy')
 
     pics_train, pics_test = get_pic_mats(100)
-    model = fit(text_train,pics_train,42,1024)
+    model = fit(text_train,pics_train,54,2048)
     vecs = predict(model,text_test)
     preds = get_prediction(vecs,pics_test)
     save_submission(preds)

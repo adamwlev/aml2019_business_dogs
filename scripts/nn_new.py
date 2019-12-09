@@ -86,8 +86,8 @@ def fit(X,y,X_val,y_val,H_1,lr,weight_decay,batch_size):
          Val Ave Rank: %g, Val MAP@20: %g""" % (t,train_ave[t],train_map[t],val_ave[t],val_map[t]))
         
         best_val_so_far = val_map[max(val_map,key=val_map.get)]
-        best_train_so_far = train_map[max(train_map,key=train_map.get)]
-        if val_map[t]<best_val_so_far*.92 or train_map[t]>1.008*best_train_so_far:
+        best_loss_so_far = losses[min(losses,key=losses.get)]
+        if val_map[t]<best_val_so_far*.92 or losses[t]>1.009*best_loss_so_far:
             print("EARLY STOP TRIGGERED BECAUSE VAL MAP HAS NOT IMPROVED FROM BEST")
             return model, losses, train_ave, train_map, val_ave, val_map, max(val_map,key=val_map.get)
 
@@ -130,7 +130,7 @@ if __name__=="__main__":
     n_components = [100,150]
     n_hidden_units = [2048,5096]
     #lr = [0.000006]
-    weight_decay = [2.2,3.5]
+    weight_decay = [2.3]#[2.2,3.5]
     batch_size = [20]
 
     results = {}
@@ -152,9 +152,11 @@ if __name__=="__main__":
             val_ave_results.append(val_ave)
         print(n_epochs_results,np.mean(n_epochs_results))
         best_epoch = int(np.mean(n_epochs_results))
-        print([d[max(d)-10] for d in val_map_results],np.mean([d[max(d)-10] for d in val_map_results]))
-        results[(n_c, n_h, lr, wd, bs)] = (np.mean([d[max(d)-10] for d in val_map_results]),
-                               np.mean([d[max(d)-10] for d in val_ave_results]),
-                               best_epoch)
+        nearest_epoch = [best_epoch if len(d)>=best_epoch else max(d) for d in val_map_results]
+        print(nearest_epoch)
+        vals = [d[ne] for d,ne in zip(val_map_results,nearest_epoch)]
+        aves = [d[ne] for d,ne in zip(val_ave_results,nearest_epoch)]
+        print(vals,np.mean(vals))
+        results[(n_c, n_h, lr, wd, bs)] = (np.mean(vals),np.mean(aves),best_epoch)
 
         print(results)
