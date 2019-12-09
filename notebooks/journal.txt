@@ -1,0 +1,35 @@
+-Tried fitting linear model via fitting matrix of weights to transform vectors from word embeddings space to picture vectors space (only convolutional layer). Trained using batched gradient descent. Got loss on train set down to about 17.35 (euclidean distance between vectors produced by weights and label picture vectors).
+    -Trying preprocessing by lowercasing all words and removing punctuation - not much boost which tells me that there is actually a lot of text in the descriptions so deduping things is not that important
+    -Trying remove stop words to filter out noise in embeddings - this actually made it worse.. interesting. I guess the embeddings are robust to stop words.
+    -Trying adding a bias in the text input matrix which will add a bias to the linear model since the mean of the picture features is far from 0. This gives some boost - down to about 17.14.
+
+I need a new metric cause the average euclidean distance changes with the size of the vectors. Instead I am going to add a metric which is cross-compatible with other vector lengths - it's average order for the label in the list of ranked similarities.
+
+Using the existing model by that metric was scoring above 2000 (out of 10000). Now trying adding the additional features (from output layer of convnet). This is significantly better - about 1850.
+
+Attempting to add regularization by including the weight penalty in the gradient. Hard to notice any difference since I am only looking at training error right now.
+
+Attempting to add tag features in. This is better and gets down to about 1815.
+
+Interesting directions to head:
+    -PCA the train picture space (use same components to tranform the test picture space) before train weights
+        -This is good and with 100 components gets to 1762. 10 components was worse. 200 gets to 1800. Seems like it works the best when the number of component is similar to the dimension of the text input.
+    -Go for a neural network instead of linear model - Neural network is doing well after adding layers, batch normalization and dropout, and minibatch optimization and switching to Adam optimizer. Performing at about .20 on 6-fold cv using gensim embeddings.
+    -Implement CV on train set for tuning hyper parameters
+
+Other things that I've tried:
+    -Using cosine similarity to output predictions instead of euclidean distance. This worked quite well - for the best linear model this got down to 820 in the average metric on the train set (no cv)
+    -Using random forest to predict the picture vectors using the text vectors. This worked pretty well, using PCA of pic data to 100 dims, this got to around 350 on 6 fold cv (no cv overfits) also using cosine similarity. Best found so far is n_estimators=500,max_depth=15. 
+
+Simplifying the neural net worked really well. Went from 5-hidden-layer network to 1 with improved performance (from .22 to .37 on hold out validation set). Increased the size of the single hidden-layer (optimal size is yet to be determined). Performing PCA to reduce the output space improved the networks' performance a lot - from .37 to .46 on a hold out validation set. Optimatal number of components yet to be determined.
+
+Performed an experiment to see whether the resnet conv features help the performance of the network or not. Used 5-fold CV to train same architecture (1 hidden layer with 2048 units). Did PCA down to 100 dims with and without the conv features. With features performed 0.467, without performed 0.456. So it doesnt make much of a difference. Rerunning while fixing the random seed in CV... Fixed it and got 0.470 and 0.458 respectively so I deem that to be conclusive enough to keep those features in.
+
+New experiment: grid search over n_components in PCA and num_hidden_units in hidden layer. lowering learning rate and running 3 values of each with 5-fold CV.
+
+{(30, 1024): 0.43669,
+ (30, 2048): 0.436705,
+ (30, 4096): 0.436365,
+ (100, 1024): 0.46622,
+ (100, 2048): 0.4646450000000001,
+ (100, 4096): 0.45801499999999995}
