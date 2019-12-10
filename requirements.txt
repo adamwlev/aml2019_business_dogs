@@ -7,3 +7,6 @@ nltk
 torch
 torchvision
 jupyter
+tensorflow
+tensorflow-hub
+gensim

@@ -2,13 +2,13 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import pairwise_distances
 import os
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import KFold
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.autograd import Variable
-from sklearn.decomposition import PCA
 import itertools
+import tensorflow_hub as hub
+import tensorflow as tf
 
 class PrepareData(Dataset):
     def __init__(self, X, y):
@@ -42,8 +42,8 @@ def fit(X,y,X_val,y_val,H_1,lr,weight_decay,batch_size):
         ).to(device)
     
     def loss_fn(y_pred, y):
-#         cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
-#         return 1 - cos(y_pred, y).mean()
+        # cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
+        # return 1 - cos(y_pred, y).mean()
     #     return torch.norm((y_pred-y), p=2, dim=1).mean()
         s = y_pred.size()[0]
         c = 2*s**2-2*s
@@ -102,7 +102,7 @@ def predict(model,X):
 
 def get_prediction(vecs,pics):
     dists = pairwise_distances(vecs,pics,metric='cosine')
-    return dists.argsort(1)
+    return dists.T.argsort(1)
 
 def map_20(ranks):
     return np.mean([(20-rank)/20 if rank<20 else 0 for rank in ranks])
@@ -112,40 +112,72 @@ def evaluate(vectors,label_vectors):
     ranks = [np.argwhere(vec==i)[0][0] for i,vec in enumerate(preds)]
     return np.mean(ranks),map_20(ranks)
 
-def get_pic_mats(n_components):
-    pics_train = np.load('pics_train_tf.npy')
-    pics_test = np.load('pics_test_tf.npy')
+def get_num(string):
+    string = string.replace('.', ' ').replace('/', ' ')
+    num = [int(s) for s in string.split() if s.isdigit()]
+    return num[0]
 
-    pca = PCA(n_components=n_components)
-    pca.fit(pics_train)
-    pics_train = pca.transform(pics_train)
-    pics_test = pca.transform(pics_test)
-    return pics_train, pics_test
+def parse_to_numpy(pd):
+    images_idx = []
+    for string in pd[0]:
+        images_idx.append(get_num(string))
+
+    pd.insert(1, "Image_Index", images_idx, True)
+    pd = pd.sort_values(by=['Image_Index'])
+    pd = pd.reset_index(drop=True)
+    del pd['Image_Index']
+    del pd[0]
+    np = pd.to_numpy()
+    return np
 
 if __name__=="__main__":
 
-    text_train = np.load('text_train_tf.npy')
-    text_test = np.load('text_test_tf.npy')
+    ### Description for train data
+    desc_files = len(os.listdir('../descriptions_train'))
+    all_desc_train = []
+
+    for i in range(desc_files):
+        empty_str = ''
+        for line in open(f'../descriptions_train/{i}.txt'):
+            empty_str += line.replace('\n',' ')
+        all_desc_train.append(empty_str)
+
+    ### Tags for train data
+    tag_files = len(os.listdir('../tags_train'))
+    all_tags_train = []
+
+    for i in range(tag_files):
+        nouns = ''
+        for line in open(f'../tags_train/{i}.txt'):
+            nouns += line.replace(':',' ')
+        all_tags_train.append(nouns.replace('\n', ' '))
+
+    train_1000 = pd.read_csv('../features_train/features_resnet1000_train.csv', header=None)
+    train_1000 = parse_to_numpy(train_1000)
     
-    n_components = [100,150]
-    n_hidden_units = [2048,5096]
-    #lr = [0.000006]
-    weight_decay = [2.3]#[2.2,3.5]
-    batch_size = [20]
+    embed = hub.load("https://tfhub.dev/google/universal-sentence-encoder-large/5")
+    train_desc = embed(all_desc_train).numpy()
+    train_tags = embed(all_tags_train).numpy()
+
+    train_pic = np.hstack((train_1000, train_tags))
+
+
+    n_hidden_units = [100,200,300]
+    learning_rates = [0.0000009]
+    weight_decay = [.1]#[2.2,3.5]
+    batch_size = [15]
 
     results = {}
 
-    for n_c, n_h, wd, bs in itertools.product(n_components,n_hidden_units,weight_decay,batch_size):
-        lr = 0.000055 if n_h==2048 else 0.000035
-        print("************ n_c=%d, n_h=%d, lr=%g, wd=%g, bs=%d ************" % (n_c,n_h,lr,wd,bs))
-        pics_train, _ = get_pic_mats(n_c)
-        cv = KFold(n_splits=5,shuffle=True,random_state=55)
+    for n_h, lr, wd, bs in itertools.product(n_hidden_units,learning_rates,weight_decay,batch_size):
+        print("************ n_h=%d, lr=%g, wd=%g, bs=%d ************" % (n_h,lr,wd,bs))
+        cv = KFold(n_splits=5)
         n_epochs_results = []
         val_map_results = []
         val_ave_results = []
-        for train_index,test_index in cv.split(text_train,pics_train):
-            rets = fit(text_train[train_index],pics_train[train_index],
-                       text_train[test_index],pics_train[test_index],n_h,lr,wd,bs)
+        for train_index,test_index in cv.split(train_pic,train_desc):
+            rets = fit(train_pic[train_index],train_desc[train_index],
+                       train_pic[test_index],train_desc[test_index],n_h,lr,wd,bs)
             model, losses, train_ave, train_map, val_ave, val_map, n_epochs = rets
             n_epochs_results.append(n_epochs)
             val_map_results.append(val_map)
@@ -157,6 +189,6 @@ if __name__=="__main__":
         vals = [d[ne] for d,ne in zip(val_map_results,nearest_epoch)]
         aves = [d[ne] for d,ne in zip(val_ave_results,nearest_epoch)]
         print(vals,np.mean(vals))
-        results[(n_c, n_h, lr, wd, bs)] = (np.mean(vals),np.mean(aves),best_epoch)
+        results[(n_h, lr, wd, bs)] = (np.mean(vals),np.mean(aves),best_epoch)
 
         print(results)
