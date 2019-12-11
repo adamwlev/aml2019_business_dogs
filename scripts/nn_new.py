@@ -9,13 +9,14 @@ from torch.autograd import Variable
 import itertools
 import tensorflow_hub as hub
 import tensorflow as tf
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 class PrepareData(Dataset):
     def __init__(self, X, y):
         if not torch.is_tensor(X):
-            self.X = torch.tensor(X, requires_grad=True)
+            self.X = torch.tensor(X, requires_grad=True).float()
         if not torch.is_tensor(y):
-            self.y = torch.tensor(y)
+            self.y = torch.tensor(y).float()
 
     def __len__(self):
         return len(self.X)
@@ -32,68 +33,72 @@ def fit(X,y,X_val,y_val,H_1,lr,weight_decay,batch_size):
     device = torch.device('cpu')
     
     D_in, D_out = X.shape[1], y.shape[1]
+    H_1, H_2 = 2048, 2048
     
     model = torch.nn.Sequential(
           torch.nn.Linear(D_in, H_1),
 #           torch.nn.Dropout(0.2),
 #           torch.nn.BatchNorm1d(H_1),
           torch.nn.ReLU(),
-          torch.nn.Linear(H_1, D_out),
+          torch.nn.Linear(H_1, H_2),
+          torch.nn.ReLU(),
+          torch.nn.Linear(H_2, D_out),
         ).to(device)
     
     def loss_fn(y_pred, y):
+        # loss 1 - simple L2 norm of different (euclidean)
+        # return torch.norm((y_pred-y), p=2, dim=1).mean()
+        
+        ## loss 2 - cosine distance 
         # cos = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
         # return 1 - cos(y_pred, y).mean()
-    #     return torch.norm((y_pred-y), p=2, dim=1).mean()
+    
+        ## loss 3 - cosine distance of label and prediction minus
+        ## every other pair (using out product)     
         s = y_pred.size()[0]
         c = 2*s**2-2*s
         cos = torch.nn.CosineSimilarity(dim=2, eps=1e-6)
         res = 1 - cos(y_pred[None,:,:], y[:,None,:])
-        ret = c - (res.sum() - s*torch.diag(res).sum())
-        if ret.item()<0:
-            print('found neg')
-            print(s,res)
+        ret = (c - (res.sum() - s*torch.diag(res).sum()))/s**2
         return ret
     
-    optimizer = torch.optim.Adam(params=model.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = torch.optim.AdamW(params=model.parameters(), lr=lr, weight_decay=weight_decay)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=lr/2, momentum=0.9)
+    # iters = len(dl)
+    # scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=lr, steps_per_epoch=iters, epochs=40)
     for t in range(100000):
+        train_losses = []
+
         for ix, (_x, _y) in enumerate(dl):
-            _x = Variable(_x).float()
-            _y = Variable(_y).float()
+            optimizer.zero_grad()
 
             y_pred = model(_x)
-
             loss = loss_fn(y_pred, _y)
+            train_losses.append(loss.item())
 
-            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            # scheduler.step(t + ix / iters)
 
-        y_pred = model(Variable(ds.X).float())
-        train_loss = loss_fn(y_pred, Variable(ds.y).float()).data.numpy()
+        train_loss = np.mean(train_losses)
         losses[t] = train_loss
-        print(t,train_loss)
 
-        ave, map_ = evaluate(y_pred.data.numpy(),ds.y.data.numpy())
-        train_ave[t] = ave * 2000/X.shape[0]
-        train_map[t] = map_ * X.shape[0]/2000
         y_pred_val = model(Variable(torch.from_numpy(X_val)).float())
         ave_val, map_val = evaluate(y_pred_val.data.numpy(),y_val)
         val_ave[t] = ave_val * 2000/X_val.shape[0]
         val_map[t] = map_val * X_val.shape[0]/2000
         n_epochs = t
-        print("""Iter %d: Train Ave Rank: %g, Train MAP@20: %g,
-         Val Ave Rank: %g, Val MAP@20: %g""" % (t,train_ave[t],train_map[t],val_ave[t],val_map[t]))
+        print("""Iter %d: Train Loss: %g, Val Ave Rank: %g, Val MAP@20: %g""" % (t,losses[t],val_ave[t],val_map[t]))
         
         best_val_so_far = val_map[max(val_map,key=val_map.get)]
         best_loss_so_far = losses[min(losses,key=losses.get)]
-        if val_map[t]<best_val_so_far*.92 or losses[t]>1.009*best_loss_so_far:
-            print("EARLY STOP TRIGGERED BECAUSE VAL MAP HAS NOT IMPROVED FROM BEST")
-            return model, losses, train_ave, train_map, val_ave, val_map, max(val_map,key=val_map.get)
+        # if val_map[t]<best_val_so_far*.95 or losses[t]>1.08*best_loss_so_far:
+        #     print("EARLY STOP TRIGGERED BECAUSE VAL MAP HAS NOT IMPROVED FROM BEST")
+        #     return model, losses, train_ave, train_map, val_ave, val_map, max(val_map,key=val_map.get)
 
-        if (t+1)%15==0:
-            for param_group in optimizer.param_groups:
-                param_group['lr'] /= 1.15
+        # if (t+1)%10==0:
+        #     for param_group in optimizer.param_groups:
+        #         param_group['lr'] /= 1.10
     
     return model, losses, train_ave, train_map, val_ave, val_map, n_epochs
 
@@ -152,6 +157,14 @@ if __name__=="__main__":
             nouns += line.replace(':',' ')
         all_tags_train.append(nouns.replace('\n', ' '))
 
+    all_docs = all_desc_train + all_tags_train
+
+    vectorizer = TfidfVectorizer(stop_words='english', min_df=2)
+    vectorizer.fit(all_docs)
+
+    train_desc_bow = np.array(vectorizer.transform(all_desc_train).todense())
+    train_tags_bow = np.array(vectorizer.transform(all_tags_train).todense())
+
     train_1000 = pd.read_csv('../features_train/features_resnet1000_train.csv', header=None)
     train_1000 = parse_to_numpy(train_1000)
     
@@ -159,13 +172,14 @@ if __name__=="__main__":
     train_desc = embed(all_desc_train).numpy()
     train_tags = embed(all_tags_train).numpy()
 
-    train_pic = np.hstack((train_1000, train_tags))
+    train_pic = np.hstack((train_1000, train_tags, train_tags_bow))
+    train_desc = np.hstack((train_desc, train_desc_bow))
 
 
-    n_hidden_units = [100,200,300]
-    learning_rates = [0.0000009]
-    weight_decay = [.1]#[2.2,3.5]
-    batch_size = [15]
+    n_hidden_units = [1024]
+    learning_rates = [0.00001]
+    weight_decay = [.2]#[2.2,3.5]
+    batch_size = [32]
 
     results = {}
 
